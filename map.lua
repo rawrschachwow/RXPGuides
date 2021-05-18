@@ -161,6 +161,9 @@ function RXP_.UpdateGotoSteps()
     end
 end
 
+-- The Frame Pool that will manage pins on the world and mini map
+-- You must use a frame pool to aquire and release pin frames,
+-- otherwise the pins will not be properly removed from the map. 
 local MapPinPool = {}
 
 MapPinPool.create = function()
@@ -171,6 +174,11 @@ MapPinPool.create = function()
     return framePool
 end
 
+-- Create the Frame with the Frame Pool.
+-- 
+-- Because you cannot pass the pin data to the Frame Pool when acquiring a frame,
+-- the frame is given a "render" function that can be used to bind the corect data 
+-- to the frame
 MapPinPool.creationFunc = function(framePool)
     local f = CreateFrame("Button", nil, UIParent, BackdropTemplateMixin and "BackdropTemplate")
 
@@ -264,23 +272,21 @@ MapPinPool.creationFunc = function(framePool)
         f:SetAlpha(pin.opacity)
     end    
 
-    f.hide = function()
-        f:SetHeight(0)
-        f:SetWidth(0)
-        f:Hide()
-        f:EnableMouse(0)
-    end
-
   return f
 end
 
+-- Hides and disables the Frame when it is released
 MapPinPool.resetterFunc = function(framePool, frame)
-    frame.hide()
+    frame:SetHeight(0)
+    frame:SetWidth(0)
+    frame:Hide()
+    frame:EnableMouse(0)
 end
 
 local worldMapFramePool = MapPinPool.create()
 local miniMapFramePool = MapPinPool.create()
 
+-- Calculates if a given element is close to any other provided pins
 local function elementIsCloseToOtherPins(element, pins)
     local overlap = RXPData.distanceBetweenPins
 
@@ -289,8 +295,8 @@ local function elementIsCloseToOtherPins(element, pins)
             local dist, dx, dy, relativeDist
             local zx, zy = HBD:GetZoneSize(pin.zone)
 
-            if pin.instance == pinElement.instance then
-                dist,dx,dy = HBD:GetWorldDistance(pin.instance, pin.wx, pin.wy, element.wx, element.wy)
+            if pinElement.instance == pinElement.instance then
+                dist,dx,dy = HBD:GetWorldDistance(pinElement.instance, pinElement.wx, pinElement.wy, element.wx, element.wy)
             end
 
             if dx ~= nil and zx ~= nil then
@@ -306,43 +312,58 @@ local function elementIsCloseToOtherPins(element, pins)
     return false
 end
 
--- Creates a list of Pins objects based on the provided steps.
--- They are then rendered by the FramePool as actual Frames.
-local function generatePins(steps, numPins, startingIndex)
+-- Creates a list of Pin data structures.
+--
+-- All of the filtering and combining of steps and elements by proximity
+-- is done in this step up front. Then the pins are rendered as WoW Frames 
+-- using the MapPinPool.
+local function generatePins(steps, numPins, startingIndex, isMiniMap)
     local pins = {}
     local step
     local numSteps = table.getn(steps)
     local i = 0;
 
+    -- Loop through the steps until we create the number of pins a user 
+    -- configures or until we reach the end of the current guide.
     while table.getn(pins) < numPins and (startingIndex + i <= numSteps) do
         local step = steps[startingIndex + i]
+        local j = 0;
 
-        for j, element in ipairs(step.elements) do
+        -- Loop through the elements in each step. Again, we check if we
+        -- already created enough pins, then we check if the element
+        -- should be included on the map. 
+        --
+        -- If it should be, we calculate whether the element is close to 
+        -- other pins. If it is, we add the element to a previous pin. 
+        --
+        -- If it is far enough away, we add a new pin to the map.
+        while table.getn(pins) < numPins and j < table.getn(step.elements) do
+            local element = step.elements[j + 1]
+
             if element.text and not element.label and not element.textOnly then
                 element.label = tostring(step.index)
             end
 
-            if element.zone and not element.optional and (not(element.parent and (element.parent.completed or element.parent.skip)) and not element.skip) then
-                local closeToOtherPins, otherPin = elementIsCloseToOtherPins(element, pins)
+            if element.zone and not (isMiniMap and element.optional) and (not(element.parent and (element.parent.completed or element.parent.skip)) and not element.skip) then
+                local closeToOtherPin, otherPin = elementIsCloseToOtherPins(element, pins)
 
-                if closeToOtherPins then
+                if closeToOtherPin then
                     table.insert(otherPin.elements, element)
                 else
                     table.insert(pins, {
-                            elements = {element}, 
-                            opacity = math.max(0.4, 1 - (table.getn(pins) * 0.05)), 
-                            x = element.x / 100, 
-                            y = element.y / 100, 
-                            instance = element.instance,
-                            wx = element.wx,
-                            wy = element.wy,
-                            zone = element.zone,
-                            mapId = element.zone
-                        })
+                        elements = {element}, 
+                        opacity = math.max(0.4, 1 - (table.getn(pins) * 0.05)), 
+                        instance = element.instance,
+                        wx = element.wx,
+                        wy = element.wy,
+                        zone = element.zone,
+                    })
                 end
 
-                table.insert(RXP_.activeWaypoints,element)
+                table.insert(RXP_.activeWaypoints, element)
             end
+
+            j = j + 1
         end
 
         i = i + 1
@@ -351,52 +372,47 @@ local function generatePins(steps, numPins, startingIndex)
     return pins
 end
 
+-- Generate pins using the current guide's steps, then add the pins to the world map
 local function addWorldMapPins()
-    if RXP_.currentGuide ~= nil and RXPCData.currentStep ~= nil then
-        local pins = generatePins(RXP_.currentGuide.steps, RXPData.numMapPins, RXPCData.currentStep)
+    -- Calculate which pins should be on the world map
+    local pins = generatePins(RXP_.currentGuide.steps, 
+        RXPData.numMapPins, 
+        RXPCData.currentStep, 
+        false
+    )
 
-        for i = table.getn(pins), 1, -1 do
-            local pin = pins[i]
-            local element = pin.elements[1]
-            local worldMapFrame = worldMapFramePool:Acquire()
-            worldMapFrame.render(pin, false)
-            HBDPins:AddWorldMapIconWorld(RXP_, worldMapFrame, element.instance, element.wx, element.wy, HBD_PINS_WORLDMAP_SHOW_CONTINENT)
-        end
+    -- Convert each "pin" data structure into a WoW frame. Then add that frame to the world map
+    for i = table.getn(pins), 1, -1 do
+        local pin = pins[i]
+        local element = pin.elements[1]
+        local worldMapFrame = worldMapFramePool:Acquire()
+        worldMapFrame.render(pin, false)
+        HBDPins:AddWorldMapIconWorld(RXP_, worldMapFrame, element.instance, element.wx, element.wy, HBD_PINS_WORLDMAP_SHOW_CONTINENT)
     end
 end
 
+-- Generate pins using only the active steps, then add the pins to the Mini Map
 local function addMiniMapPins(pins)
-    if RXP_.MainFrame.CurrentStepFrame.activeSteps ~= nil then
-        local pins = generatePins(
-            RXP_.MainFrame.CurrentStepFrame.activeSteps, 
-            table.getn(RXP_.MainFrame.CurrentStepFrame.activeSteps), 
-            1
-        )
+    -- Calculate which pins should be on the mini map
+    local pins = generatePins(
+        RXP_.MainFrame.CurrentStepFrame.activeSteps, 
+        table.getn(RXP_.MainFrame.CurrentStepFrame.activeSteps), 
+        1,
+        true
+    )
 
-        for i = table.getn(pins), 1, -1 do
-            local pin = pins[i]
-            local element = pin.elements[1]
-            local miniMapFrame = miniMapFramePool:Acquire()
-            miniMapFrame.render(pin, true)
-            HBDPins:AddMinimapIconWorld(RXP_, miniMapFrame, element.instance, element.wx, element.wy, true, true)
-        end
+    -- Convert each "pin" data structure into a WoW frame. Then add that frame to the mini map
+    for i = table.getn(pins), 1, -1 do
+        local pin = pins[i]
+        local element = pin.elements[1]
+        local miniMapFrame = miniMapFramePool:Acquire()
+        miniMapFrame.render(pin, true)
+        HBDPins:AddMinimapIconWorld(RXP_, miniMapFrame, element.instance, element.wx, element.wy, true, true)
     end
 end
 
-local function resetMap()
-    RXP_.activeWaypoints = {}
-    HBDPins:RemoveAllMinimapIcons(RXP_)
-    HBDPins:RemoveAllWorldMapIcons(RXP_)
-    worldMapFramePool:ReleaseAll()
-    miniMapFramePool:ReleaseAll()
-end
-
-function RXP_.UpdateMap()
-    resetMap()
-
-    addWorldMapPins()
-    addMiniMapPins()
-
+-- Updates the arrow
+local function updateArrow()
     for i,element in ipairs(RXP_.activeWaypoints) do
         if element.arrow and element.step.active and 
         not(element.parent and (element.parent.completed or element.parent.skip)) and not(element.text and (element.completed or element.skip) and not element.skip) then
@@ -409,6 +425,23 @@ function RXP_.UpdateMap()
     end
 
     af:Hide()
+end
 
+-- Removes all pins from the map and mini map and resets all data structrures
+local function resetMap()
+    RXP_.activeWaypoints = {}
     RXP_.updateMap = false
+    HBDPins:RemoveAllMinimapIcons(RXP_)
+    HBDPins:RemoveAllWorldMapIcons(RXP_)
+    worldMapFramePool:ReleaseAll()
+    miniMapFramePool:ReleaseAll()
+end
+
+function RXP_.UpdateMap()
+    if RXP_.currentGuide == nil then return end
+
+    resetMap()
+    addWorldMapPins()
+    addMiniMapPins()
+    updateArrow()
 end
