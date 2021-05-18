@@ -1,4 +1,5 @@
 local addonName = ...
+
 RXP_.mapId = {
 ["Durotar"] = 1411,
 ["Mulgore"] = 1412,
@@ -70,7 +71,6 @@ RXP_.mapId = {
 local HBD = LibStub("HereBeDragons-2.0")
 local HBDPins = LibStub("HereBeDragons-Pins-2.0")
 RXP_.activeWaypoints = {}
-RXP_.mapPins = {}
 local colors = RXP_.colors
 
 RXP_.arrowFrame = CreateFrame("Frame","RXPG_ARROW",UIParent)
@@ -161,274 +161,241 @@ function RXP_.UpdateGotoSteps()
     end
 end
 
+local MapPinPool = {}
 
+MapPinPool.create = function()
+    local framePool = CreateFramePool()
+    framePool.creationFunc = MapPinPool.creationFunc
+    framePool.resetterFunc = MapPinPool.resetterFunc
 
-
-local function TooltipHandler(self)
-    if not tooltip then
-        tooltip = true
-    end
-    local text
-    if self.element.parent then
-        text =  self.element.parent.tooltipText
-    else
-        text = self.element.tooltipText
-    end
-    text = text or RXP_.MainFrame.Steps.frame[self.step.index].text:GetText()
-    if text then
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT",0,0)
-        GameTooltip:ClearLines()
-        GameTooltip:AddLine("Step "..self.step.index,unpack(colors.mapPins))
-        GameTooltip:AddLine(text)
-        for i,element in pairs(self.connectedPins) do
-            local text
-            if element.parent then
-                text =  element.parent.tooltipText
-            elseif not element.hideTooltip then
-                text = element.tooltipText
-            end
-            text = text or RXP_.MainFrame.Steps.frame[element.step.index].text:GetText()
-            GameTooltip:AddLine("Step "..element.step.index,unpack(colors.mapPins))
-            GameTooltip:AddLine(text)
-        end
-        GameTooltip:Show()
-    end
+    return framePool
 end
 
+MapPinPool.creationFunc = function(framePool)
+    local f = CreateFrame("Button", nil, UIParent, BackdropTemplateMixin and "BackdropTemplate")
 
+    -- Styling
+    f:SetBackdrop({
+        bgFile = "Interface\\Addons\\" .. addonName .. "\\Textures\\white_circle",
+        insets = { left = 0, right = 0, top = 0, bottom = 0 }
+    })
+    f:SetWidth(0)
+    f:SetHeight(0)
+    f:EnableMouse()
+    f:SetMouseClickEnabled(false)
+    f:Hide()
 
-function CreateWPframe(id,step,element)
+    -- Active Step Indicator (A Target Icon)
+    f.inner = CreateFrame("Button", nil, f, BackdropTemplateMixin and "BackdropTemplate")
+    f.inner:SetBackdrop({
+       bgFile = "Interface\\Addons\\" .. addonName .. "\\Textures\\map_active_step_target_icon",
+        insets = { left = 0, right = 0, top = 0, bottom = 0 }
+    })
+    f.inner:SetPoint("CENTER", 0, 0)
+    f.inner:EnableMouse()
 
-    RXP_.mapPins[id] = RXP_.mapPins[id] or CreateFrame("Button", "RXP_MAP_"..tostring(#RXP_.mapPins+1),nil,BackdropTemplateMixin and "BackdropTemplate")
-    local f = RXP_.mapPins[id]
-    f.element = element
-    f.step = step
-    f.connectedPins = {}
+    -- Text
+    f.text = f.inner:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    f.text:SetTextColor(unpack(colors.mapPins))
+    f.text:SetFont(RXP_.font, 14,"OUTLINE") 
 
-    --f.text:SetTextColor(0.9,0.1,0.1,1)
-    if not f.text then
-        f:SetWidth(16)
-        f:SetHeight(16)
+    -- Renders the Pin with Step Information
+    f.render = function(pin, isMiniMapPin)
+        local step = pin.elements[1].step
+        local stepIndex = pin.elements[1].step.index
 
-        --f.text:SetFontObject(GameFontNormal)
-         f:SetBackdrop({
-            bgFile = "Interface\\Addons\\" .. addonName .. "\\Textures\\white_circle",
-            insets = { left = 0, right = 0, top = 0, bottom = 0 }
-        })
-        f:SetBackdropColor(0.0, 0.0, 0.0, RXPData.worldMapPinBackgroundOpacity)
-        --f:SetBackdrop(backdrop)
-        f.text = f.text or f:CreateFontString(nil,"OVERLAY") 
-        f.text:SetTextColor(unpack(colors.mapPins))
-        f.text:SetFont(RXP_.font, 14,"OUTLINE")
-        f.text:SetJustifyH("LEFT")
-        f.text:SetJustifyV("CENTER")
+        if table.getn(pin.elements) > 1 then
+            f.text:SetText(stepIndex .. "+")
+        else
+            f.text:SetText(stepIndex)
+        end
 
-        f:SetScript("OnEnter",TooltipHandler)
+        local size = math.max(f.text:GetWidth(), f.text:GetHeight()) + 8
+
+        if step.active then
+            f:SetAlpha(1)
+            f:SetWidth(size + 3)
+            f:SetHeight(size + 3)
+            f:SetBackdropColor(0.0, 0.0, 0.0, RXPData.worldMapPinBackgroundOpacity)
+            f.inner:SetBackdropColor(1, 1, 1, 1)
+            f.inner:SetWidth(size + 3)
+            f.inner:SetHeight(size + 3)
+
+            f.text:SetFont(RXP_.font, 14,"OUTLINE")
+        else
+            f:SetBackdropColor(0.1, 0.1, 0.1, RXPData.worldMapPinBackgroundOpacity)
+            f:SetWidth(size)
+            f:SetHeight(size)
+
+            f.inner:SetBackdropColor(0, 0, 0, 0)
+
+            f.text:SetFont(RXP_.font, 9,"OUTLINE")
+        end
+
+        -- Mouse Handlers
+        f:SetScript("OnEnter",function()
+            GameTooltip:SetOwner(f, "ANCHOR_RIGHT",0,0)
+            GameTooltip:ClearLines()
+
+            for i,element in pairs(pin.elements) do
+                local text
+                if element.parent then
+                    text =  element.parent.tooltipText
+                elseif not element.hideTooltip then
+                    text = element.tooltipText
+                end
+                text = text or RXP_.MainFrame.Steps.frame[element.step.index].text:GetText()
+                GameTooltip:AddLine("Step "..element.step.index,unpack(colors.mapPins))
+                GameTooltip:AddLine(text)
+            end
+
+            GameTooltip:Show()
+        end)
+
         f:SetScript("OnLeave",function(self)
             GameTooltip:Hide()
         end)
-        f:SetMouseClickEnabled(false)
 
+        f.inner:SetPoint("CENTER", f, 0, 0)
+        f.inner:SetWidth(size)
+        f.inner:SetHeight(size)
+        f.text:SetPoint("CENTER", f, 0, 0)
+        f:SetScale(RXPData.worldMapPinScale)
+        f:SetAlpha(pin.opacity)
+    end    
+
+    f.hide = function()
+        f:SetHeight(0)
+        f:SetWidth(0)
         f:Hide()
+        f:EnableMouse(0)
     end
 
-    --f:ClearAllPoints()
-
--->>>>
   return f
 end
 
-
-
-
-
-
-
-
-
-
-
-
-
---[[
-    f.text:SetText(text)
-    local x = tonumber(x) / 100 * WorldMapButton:GetWidth()
-    local y = tonumber(y) / 100 * WorldMapButton:GetHeight()
-    local t = text
-    f.map = map
-    f:SetPoint("CENTER", WorldMapButton, "TOPLEFT", f.x, -f.y)
-]]
---wp = CreateWPframe()
-
-local function AddMapIcon(...)
-    if RXPData.numMapPins == 0 then
-        return
-    else
-        return HBDPins:AddWorldMapIconWorld(...)
-    end
-end
-local function AddMinimapIcon(...)
-    if RXPData.numMapPins == 0 then
-        return
-    else
-        return HBDPins:AddMinimapIconWorld(...)
-    end
+MapPinPool.resetterFunc = function(framePool, frame)
+    frame.hide()
 end
 
---local L = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+local worldMapFramePool = MapPinPool.create()
+local miniMapFramePool = MapPinPool.create()
 
+local function elementIsCloseToOtherPins(element, pins)
+    local overlap = RXPData.distanceBetweenPins
 
---local W = {"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"}
+    for i, pin in ipairs(pins) do
+        for j, pinElement in ipairs(pin.elements) do
+            local dist, dx, dy, relativeDist
+            local zx, zy = HBD:GetZoneSize(pin.zone)
 
-function RXP_.UpdateMap()
+            if pin.instance == pinElement.instance then
+                dist,dx,dy = HBD:GetWorldDistance(pin.instance, pin.wx, pin.wy, element.wx, element.wy)
+            end
 
-    RXP_.updateMap = false
-    if not RXP_.currentGuide then return end
-    af.element = nil
-    RXP_.activeWaypoints = {}
-    HBDPins:RemoveAllMinimapIcons(RXP_)
-    HBDPins:RemoveAllWorldMapIcons(RXP_)
-    local guide = RXP_.currentGuide
-    local n = 0
+            if dx ~= nil and zx ~= nil then
+                relativeDist = (dx/zx)^2 + (dy/zy)^2
+            end
 
-    local function GeneratePins(step,miniMapPin)
-        local subitem = 0
-        for j,element in ipairs(step.elements) do
+            if (relativeDist and relativeDist < 0.00001) or (dist and dist < 60) then
+                return true, pin
+            end
+        end
+    end
+
+    return false
+end
+
+-- Creates a list of Pins objects based on the provided steps.
+-- They are then rendered by the FramePool as actual Frames.
+local function generatePins(steps, numPins, startingIndex)
+    local pins = {}
+    local step
+    local numSteps = table.getn(steps)
+    local i = 0;
+
+    while table.getn(pins) < numPins and (startingIndex + i <= numSteps) do
+        local step = steps[startingIndex + i]
+
+        for j, element in ipairs(step.elements) do
             if element.text and not element.label and not element.textOnly then
                 element.label = tostring(step.index)
             end
-            if element.zone and (not(element.parent and (element.parent.completed or element.parent.skip)) and not element.skip) then
-                n = n +1
-                element.mapPin = CreateWPframe(n,step,element)
-                element.mapPin:SetBackdropColor(0.0, 0.0, 0.0, RXPData.worldMapPinBackgroundOpacity)
+
+            if element.zone and not element.optional and (not(element.parent and (element.parent.completed or element.parent.skip)) and not element.skip) then
+                local closeToOtherPins, otherPin = elementIsCloseToOtherPins(element, pins)
+
+                if closeToOtherPins then
+                    table.insert(otherPin.elements, element)
+                else
+                    table.insert(pins, {
+                            elements = {element}, 
+                            opacity = math.max(0.4, 1 - (table.getn(pins) * 0.05)), 
+                            x = element.x / 100, 
+                            y = element.y / 100, 
+                            instance = element.instance,
+                            wx = element.wx,
+                            wy = element.wy,
+                            zone = element.zone,
+                            mapId = element.zone
+                        })
+                end
+
                 table.insert(RXP_.activeWaypoints,element)
-                if not element.optional then
-                    local icon
-                    if element.parent then
-                        icon = element.parent.icon or RXP_.icons[element.parent.tag]
-                    end
-                    icon = icon or ""
-                    local label
-                    if element.parent then
-                        label = element.parent.label or tostring(step.index)
-                    elseif element.label then
-                        label = element.label or tostring(step.index)
-                    else
-                        label = tostring(step.index)
-                        element.label = label
-                    end
-                    local framelevel
-                    element.mapPin:SetAlpha(1)
-                    if step.active then
-                        framelevel = "PIN_FRAME_LEVEL_SUPER_TRACKED_QUEST"
-                    else
-                        framelevel = "PIN_FRAME_LEVEL_ACTIVE_QUEST"
-                        --element.mapPin:SetAlpha(0.8)
-                    end
-                    if step.active and icon == "" then
-                        element.mapPin.text:SetFont(RXP_.font, 14,"OUTLINE")
-                    else
-                        element.mapPin.text:SetFont(RXP_.font, 9,"OUTLINE")
-                    end
-                    element.mapPin.text:SetText(label..icon)
-                    AddMapIcon(RXP_, RXP_.mapPins[n], element.instance, element.wx, element.wy, HBD_PINS_WORLDMAP_SHOW_CONTINENT, framelevel)
-                    element.mapPin.text:SetPoint("CENTER",0,0)
-                    element.mapPin:SetWidth(element.mapPin.text:GetStringWidth()+3)
-                    element.mapPin:SetHeight(element.mapPin.text:GetStringHeight()+3)
-                    element.mapPin:Show()
-                    if miniMapPin and step.active then
-                        n = n +1
-                        element.miniMapPin = CreateWPframe(n,step,element)
-                        element.miniMapPin:SetAlpha(0.8)
-                        local miniMapIcon = icon
-                        if icon == "" then
-                            miniMapIcon = label
-                        end
-                        element.miniMapPin.text:SetText(miniMapIcon)
-                        AddMinimapIcon(RXP_, RXP_.mapPins[n], element.instance, element.wx, element.wy, true,true)
-                        element.miniMapPin.text:SetPoint("LEFT",1,0)
-                        element.miniMapPin:Show()
-                    end
-                end
-                --print(n,element.zone,element.x,element.y)
-                --
             end
         end
-    end
 
-    for i,step in ipairs(RXP_.MainFrame.CurrentStepFrame.activeSteps) do
-        GeneratePins(step,true)
+        i = i + 1
     end
+    
+    return pins
+end
 
-    --local stepn = RXPCData.currentStep
-    local npins = 0
-    for stepn = RXPCData.currentStep+1, RXPCData.currentStep+RXPData.numMapPins do
-        if stepn > #RXP_.currentGuide.steps then
-            break
-        end
-        local step = RXP_.currentGuide.steps[stepn]
-        local nelements = 0
-        local ncompleted = 0
-        for i,element in ipairs(step.elements) do
-            nelements = nelements + 1
-            if element.tag then
-                element.element = element
-                RXP_.functions[element.tag](element)
-            end
-            if (element.completed or element.skip) or element.textOnly or not element.text then
-                ncompleted = ncompleted + 1
-            end 
-        end
-        if nelements == ncompleted and nelements > 0 then
-            step.completed = true
-        else
-            step.completed = nil
-            npins = npins + 1
+local function addWorldMapPins()
+    if RXP_.currentGuide ~= nil and RXPCData.currentStep ~= nil then
+        local pins = generatePins(RXP_.currentGuide.steps, RXPData.numMapPins, RXPCData.currentStep)
+
+        for i = table.getn(pins), 1, -1 do
+            local pin = pins[i]
+            local element = pin.elements[1]
+            local worldMapFrame = worldMapFramePool:Acquire()
+            worldMapFrame.render(pin, false)
+            HBDPins:AddWorldMapIconWorld(RXP_, worldMapFrame, element.instance, element.wx, element.wy, HBD_PINS_WORLDMAP_SHOW_CONTINENT)
         end
     end
+end
 
-    for i = RXPCData.currentStep+1,RXPCData.currentStep+RXPData.numMapPins do
-        if i > #RXP_.currentGuide.steps then
-            break
-        end
-        local step = RXP_.currentGuide.steps[i]
-        GeneratePins(step)
-    end
+local function addMiniMapPins(pins)
+    if RXP_.MainFrame.CurrentStepFrame.activeSteps ~= nil then
+        local pins = generatePins(
+            RXP_.MainFrame.CurrentStepFrame.activeSteps, 
+            table.getn(RXP_.MainFrame.CurrentStepFrame.activeSteps), 
+            1
+        )
 
-    for i,current in ipairs(RXP_.activeWaypoints) do
-        for j = 1,i-1 do
-            local element = RXP_.activeWaypoints[j]
-            if i <= j then break end
-            if not element.optional then
-                local dist,dx,dy
-                local zx, zy = HBD:GetZoneSize(current.zone)
-                if current.instance == element.instance then
-                    dist,dx,dy = HBD:GetWorldDistance(current.instance, current.wx, current.wy, element.wx, element.wy)
-                end
-                --print(dist)
-                local relativeDist
-                if dx and zx then
-                    relativeDist = (dx/zx)^2 + (dy/zy)^2
-                end
-
-                if (relativeDist and relativeDist < 0.00001) or (dist and dist < 60) then
-                    
-                    if not element.parent then
-                        element.mapPin.text:SetText(element.label.."+")
-                        element.mapPin:SetWidth(element.mapPin.text:GetStringWidth()+3)
-                        element.mapPin:SetHeight(element.mapPin.text:GetStringHeight()+3)
-                        current.mapPin:Hide()
-                    else
-                        current.mapPin:Show()
-                    end
-                        current.mapPin:SetAlpha(0.33)
-                        current.mapPin:SetBackdropColor(0.0, 0.0, 0.0, 0.0)
-                    table.insert(element.mapPin.connectedPins,current)
-                    table.insert(current.mapPin.connectedPins,element)
-                end
-            end
+        for i = table.getn(pins), 1, -1 do
+            local pin = pins[i]
+            local element = pin.elements[1]
+            local miniMapFrame = miniMapFramePool:Acquire()
+            miniMapFrame.render(pin, true)
+            HBDPins:AddMinimapIconWorld(RXP_, miniMapFrame, element.instance, element.wx, element.wy, true, true)
         end
     end
+end
+
+local function resetMap()
+    RXP_.activeWaypoints = {}
+    HBDPins:RemoveAllMinimapIcons(RXP_)
+    HBDPins:RemoveAllWorldMapIcons(RXP_)
+    worldMapFramePool:ReleaseAll()
+    miniMapFramePool:ReleaseAll()
+end
+
+function RXP_.UpdateMap()
+    resetMap()
+
+    addWorldMapPins()
+    addMiniMapPins()
 
     for i,element in ipairs(RXP_.activeWaypoints) do
         if element.arrow and element.step.active and 
@@ -440,5 +407,8 @@ function RXP_.UpdateMap()
             return
         end
     end
+
     af:Hide()
+
+    RXP_.updateMap = false
 end
